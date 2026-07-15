@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package kvpb;
+
+option go_package = "github.com/rohithreddy/distkv/proto/kvpb";
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bool   found = 1;
+  bytes  value = 2;
+}
+
+message PutRequest {
+  string key   = 1;
+  bytes  value = 2;
+  // Client-supplied ID for exactly-once semantics (dedup on retry).
+  string client_id = 3;
+  uint64 seq       = 4;
+}
+
+message PutResponse {}
+
+message DeleteRequest {
+  string key       = 1;
+  string client_id = 2;
+  uint64 seq       = 3;
+}
+
+message DeleteResponse {}
+
+message StatusRequest {}
+
+message StatusResponse {
+  uint64 node_id      = 1;
+  bool   is_leader    = 2;
+  uint64 leader_id    = 3;
+  uint64 term         = 4;
+  uint64 commit_index = 5;
+  uint64 applied_index = 6;
+}
+
+service KV {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+}

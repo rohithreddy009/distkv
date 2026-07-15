@@ -1,0 +1,75 @@
+services:
+  distkv-node1:
+    build: .
+    command:
+      - -id=1
+      - -dir=/data
+      - -kv=:7001
+      - -raft=:8001
+      - -metrics=:9001
+      - -peers=1=distkv-node1:8001,2=distkv-node2:8002,3=distkv-node3:8003
+    ports:
+      - "7001:7001"
+      - "9001:9001"
+    volumes:
+      - distkv-n1:/data
+
+  distkv-node2:
+    build: .
+    command:
+      - -id=2
+      - -dir=/data
+      - -kv=:7002
+      - -raft=:8002
+      - -metrics=:9002
+      - -peers=1=distkv-node1:8001,2=distkv-node2:8002,3=distkv-node3:8003
+    ports:
+      - "7002:7002"
+      - "9002:9002"
+    volumes:
+      - distkv-n2:/data
+
+  distkv-node3:
+    build: .
+    command:
+      - -id=3
+      - -dir=/data
+      - -kv=:7003
+      - -raft=:8003
+      - -metrics=:9003
+      - -peers=1=distkv-node1:8001,2=distkv-node2:8002,3=distkv-node3:8003
+    ports:
+      - "7003:7003"
+      - "9003:9003"
+    volumes:
+      - distkv-n3:/data
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - distkv-node1
+      - distkv-node2
+      - distkv-node3
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  distkv-n1:
+  distkv-n2:
+  distkv-n3:

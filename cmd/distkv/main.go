@@ -24,6 +24,7 @@ func main() {
 	kvAddr := flag.String("kv", "", "client-facing gRPC listen address, e.g. :7001")
 	raftAddr := flag.String("raft", "", "raft gRPC listen address, e.g. :8001")
 	peersFlag := flag.String("peers", "", "comma-separated id=host:port raft addresses, including self")
+	metricsAddr := flag.String("metrics", "", "Prometheus /metrics HTTP address, e.g. :9001")
 	verbose := flag.Bool("v", false, "debug logging")
 	flag.Parse()
 
@@ -54,12 +55,13 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
 	srv, err := server.New(server.Options{
-		ID:         *id,
-		Dir:        *dir,
-		ListenKV:   *kvAddr,
-		ListenRaft: *raftAddr,
-		Peers:      peers,
-		Logger:     logger,
+		ID:            *id,
+		Dir:           *dir,
+		ListenKV:      *kvAddr,
+		ListenRaft:    *raftAddr,
+		ListenMetrics: *metricsAddr,
+		Peers:         peers,
+		Logger:        logger,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "start: %v\n", err)

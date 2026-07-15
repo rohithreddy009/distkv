@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: distkv
+    static_configs:
+      - targets:
+          - distkv-node1:9001
+          - distkv-node2:9002
+          - distkv-node3:9003

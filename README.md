@@ -31,6 +31,9 @@ Client ──gRPC──▶ KV Server ──propose──▶ Raft Core ◀──g
 - **Fault-injection harness** (`harness/`): in-process cluster with a
   simulated network supporting partitions, per-link cuts, random message
   drops, and latency injection.
+- **Observability** (`server/metrics.go`, `monitoring/`): Prometheus
+  `/metrics` on each node (ports 9001–9003) and a Grafana dashboard for
+  leader status, latency, apply lag, and election events.
 
 ## Quick start
 
@@ -46,6 +49,27 @@ Requires Go 1.22+ (protoc + plugins only needed to regenerate protos).
 ./scripts/chaos.sh             # kill -9 the leader, measure recovery, verify no data loss
 ./scripts/stop-cluster.sh
 ```
+
+## Monitoring (Prometheus + Grafana)
+
+**Option A — local cluster + Docker monitoring**
+
+```bash
+./scripts/start-cluster.sh      # nodes expose /metrics on :9001-:9003
+./scripts/start-monitoring.sh   # Prometheus :9090, Grafana :3000 (admin/admin)
+# open Grafana -> DistKV -> DistKV Overview
+./scripts/stop-monitoring.sh
+```
+
+**Option B — full stack in Docker**
+
+```bash
+docker compose up --build
+# KV: localhost:7001-7003  |  Grafana: localhost:3000  |  Prometheus: localhost:9090
+```
+
+Example metrics: `distkv_is_leader`, `distkv_kv_request_duration_seconds`,
+`distkv_apply_lag`, `distkv_leader_elections_total`.
 
 ## Testing
 

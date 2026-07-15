@@ -14,11 +14,11 @@ for i in 1 2 3; do
     echo "node $i already running (pid $(cat data/n$i.pid))"
     continue
   fi
-  nohup ./bin/distkv -id "$i" -dir "data/n$i" -kv ":700$i" -raft ":800$i" -peers "$PEERS" \
+  nohup ./bin/distkv -id "$i" -dir "data/n$i" -kv ":700$i" -raft ":800$i" -metrics ":900$i" -peers "$PEERS" \
     >> "data/n$i.log" 2>&1 &
   echo $! > "data/n$i.pid"
   disown
-  echo "started node $i (pid $!) kv=:700$i raft=:800$i"
+  echo "started node $i (pid $!) kv=:700$i raft=:800$i metrics=:900$i"
 done
 
 sleep 1

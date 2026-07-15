@@ -1,0 +1,114 @@
+{
+  "uid": "distkv-overview",
+  "title": "DistKV Overview",
+  "tags": ["distkv"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Leader (1=yes)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "distkv_is_leader", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Raft Term",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        { "expr": "distkv_raft_term", "legendFormat": "node {{instance}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Leader Elections (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        { "expr": "rate(distkv_leader_elections_total[1m])", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "KV Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(distkv_kv_requests_total[1m])) by (op)", "legendFormat": "{{op}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "KV Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(distkv_kv_errors_total[1m])) by (op)", "legendFormat": "{{op}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Read Latency p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(distkv_kv_request_duration_seconds_bucket{op=\"get\"}[1m])) by (le, instance))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 7,
+      "title": "Write Latency p99 (put)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(distkv_kv_request_duration_seconds_bucket{op=\"put\"}[1m])) by (le, instance))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 8,
+      "title": "ReadIndex Latency p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(distkv_readindex_duration_seconds_bucket[1m])) by (le, instance))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 9,
+      "title": "Commit Index",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "distkv_commit_index", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Apply Lag",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        { "expr": "distkv_apply_lag", "legendFormat": "{{instance}}" }
+      ]
+    }
+  ]
+}

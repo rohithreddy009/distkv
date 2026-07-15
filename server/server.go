@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
@@ -23,12 +24,13 @@ import (
 const SnapshotThreshold = 10000
 
 type Options struct {
-	ID        uint64
-	Dir       string
-	ListenKV  string            // client-facing gRPC address
-	ListenRaft string           // raft-facing gRPC address
-	Peers     map[uint64]string // peer ID -> raft address (including self)
-	Logger    *slog.Logger
+	ID           uint64
+	Dir          string
+	ListenKV     string            // client-facing gRPC address
+	ListenRaft   string            // raft-facing gRPC address
+	ListenMetrics string           // Prometheus /metrics HTTP address ("" = disabled)
+	Peers        map[uint64]string // peer ID -> raft address (including self)
+	Logger       *slog.Logger
 }
 
 // Server ties together the Raft node, state machine, and gRPC services.
@@ -47,6 +49,8 @@ type Server struct {
 
 	grpcKV   *grpc.Server
 	grpcRaft *grpc.Server
+
+	metricsStop chan struct{}
 }
 
 type waitResult struct {
@@ -103,6 +107,10 @@ func New(opts Options) (*Server, error) {
 	}
 
 	go s.applyLoop(applyCh)
+	if opts.ListenMetrics != "" {
+		s.metricsStop = make(chan struct{})
+		go s.runMetricsCollector(s.metricsStop)
+	}
 	return s, nil
 }
 
@@ -202,10 +210,13 @@ func (s *Server) notLeaderErr() error {
 // --- KV RPCs ---
 
 func (s *Server) Put(ctx context.Context, req *kvpb.PutRequest) (*kvpb.PutResponse, error) {
+	start := time.Now()
+	proposalsTotal.Inc()
 	err := s.propose(ctx, Command{
 		Op: "put", Key: req.Key, Value: req.Value,
 		ClientID: req.ClientId, Seq: req.Seq,
 	})
+	observeKV("put", start, err)
 	if err != nil {
 		return nil, err
 	}
@@ -213,10 +224,13 @@ func (s *Server) Put(ctx context.Context, req *kvpb.PutRequest) (*kvpb.PutRespon
 }
 
 func (s *Server) Delete(ctx context.Context, req *kvpb.DeleteRequest) (*kvpb.DeleteResponse, error) {
+	start := time.Now()
+	proposalsTotal.Inc()
 	err := s.propose(ctx, Command{
 		Op: "delete", Key: req.Key,
 		ClientID: req.ClientId, Seq: req.Seq,
 	})
+	observeKV("delete", start, err)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +240,12 @@ func (s *Server) Delete(ctx context.Context, req *kvpb.DeleteRequest) (*kvpb.Del
 // Get serves a linearizable read via ReadIndex: quorum confirms leadership,
 // then the state machine applies through the read index before lookup.
 func (s *Server) Get(ctx context.Context, req *kvpb.GetRequest) (*kvpb.GetResponse, error) {
+	start := time.Now()
+	riStart := time.Now()
 	readIdx, err := s.node.ReadIndex(ctx)
+	readIndexLatency.Observe(time.Since(riStart).Seconds())
 	if err != nil {
+		observeKV("get", start, err)
 		return nil, s.notLeaderErr()
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -239,18 +257,24 @@ func (s *Server) Get(ctx context.Context, req *kvpb.GetRequest) (*kvpb.GetRespon
 			break
 		}
 		if time.Now().After(deadline) {
-			return nil, status.Error(codes.Unavailable, "apply lag on read")
+			err = status.Error(codes.Unavailable, "apply lag on read")
+			observeKV("get", start, err)
+			return nil, err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, status.Error(codes.DeadlineExceeded, ctx.Err().Error())
+			err = status.Error(codes.DeadlineExceeded, ctx.Err().Error())
+			observeKV("get", start, err)
+			return nil, err
 		case <-time.After(time.Millisecond):
 		}
 	}
 	val, found, err := s.sm.get(req.Key)
 	if err != nil {
+		observeKV("get", start, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	observeKV("get", start, nil)
 	return &kvpb.GetResponse{Found: found, Value: val}, nil
 }
 
@@ -286,14 +310,29 @@ func (s *Server) Serve() error {
 	registerRaft(s.grpcRaft, raftSvc)
 	kvpb.RegisterKVServer(s.grpcKV, s)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() { errCh <- s.grpcRaft.Serve(raftLis) }()
 	go func() { errCh <- s.grpcKV.Serve(kvLis) }()
+	if s.opts.ListenMetrics != "" {
+		metricsLis, err := net.Listen("tcp", s.opts.ListenMetrics)
+		if err != nil {
+			return err
+		}
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metricsHandler())
+		go func() {
+			s.logger.Info("metrics up", "addr", s.opts.ListenMetrics)
+			errCh <- http.Serve(metricsLis, mux)
+		}()
+	}
 	s.logger.Info("distkv node up", "id", s.opts.ID, "kv", s.opts.ListenKV, "raft", s.opts.ListenRaft)
 	return <-errCh
 }
 
 func (s *Server) Stop() {
+	if s.metricsStop != nil {
+		close(s.metricsStop)
+	}
 	if s.grpcKV != nil {
 		s.grpcKV.Stop()
 	}

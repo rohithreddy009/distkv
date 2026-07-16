@@ -24,7 +24,35 @@ type grpcTransport struct {
 }
 
 func newGRPCTransport(addrs map[uint64]string) *grpcTransport {
-	return &grpcTransport{addrs: addrs, conns: map[uint64]raftpb.RaftClient{}}
+	cp := make(map[uint64]string, len(addrs))
+	for k, v := range addrs {
+		cp[k] = v
+	}
+	return &grpcTransport{addrs: cp, conns: map[uint64]raftpb.RaftClient{}}
+}
+
+func (t *grpcTransport) SetPeer(id uint64, addr string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.addrs[id] = addr
+	delete(t.conns, id)
+}
+
+func (t *grpcTransport) RemovePeer(id uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.addrs, id)
+	delete(t.conns, id)
+}
+
+func (t *grpcTransport) Peers() map[uint64]string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[uint64]string, len(t.addrs))
+	for k, v := range t.addrs {
+		out[k] = v
+	}
+	return out
 }
 
 func (t *grpcTransport) client(peer uint64) (raftpb.RaftClient, error) {

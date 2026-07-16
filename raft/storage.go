@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/rohithreddy/distkv/proto/raftpb"
 	"github.com/rohithreddy/distkv/storage"
 )
@@ -16,8 +18,9 @@ import (
 //
 // WAL record types:
 //   1: hard state   term(8) | votedFor(8)
-//   2: log append   term(8) | index(8) | data
+//   2: log append   term(8) | index(8) | proto(Entry)
 //   3: truncate     from-index(8)  (drop entries >= from)
+//   4: conf state   encoded ConfState
 type diskStorage struct {
 	dir     string
 	wal     *storage.WAL
@@ -26,6 +29,8 @@ type diskStorage struct {
 	term     uint64
 	votedFor uint64 // 0 = none
 	dirty    bool   // appended entries not yet fsynced (group commit)
+
+	conf ConfState
 
 	// log[0] corresponds to index snapIndex+1
 	log       []*raftpb.Entry
@@ -38,22 +43,32 @@ const (
 	recHardState byte = 1
 	recAppend    byte = 2
 	recTruncate  byte = 3
+	recConfState byte = 4
 )
 
-func openDiskStorage(dir string) (*diskStorage, error) {
+func openDiskStorage(dir string, bootstrap []uint64) (*diskStorage, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	s := &diskStorage{dir: dir, walPath: filepath.Join(dir, "raft.wal")}
+	s := &diskStorage{
+		dir:     dir,
+		walPath: filepath.Join(dir, "raft.wal"),
+		conf:    NewConfState(bootstrap),
+	}
 
 	// Load snapshot first: log indices in the WAL are relative to it.
 	meta, err := os.ReadFile(filepath.Join(dir, "snapshot.meta"))
-	if err == nil && len(meta) == 16 {
+	if err == nil && len(meta) >= 16 {
 		s.snapIndex = binary.LittleEndian.Uint64(meta[0:8])
 		s.snapTerm = binary.LittleEndian.Uint64(meta[8:16])
 		s.snapshot, err = os.ReadFile(filepath.Join(dir, "snapshot.bin"))
 		if err != nil {
 			return nil, fmt.Errorf("snapshot.meta exists but snapshot.bin unreadable: %w", err)
+		}
+		if confData, err := os.ReadFile(filepath.Join(dir, "snapshot.conf")); err == nil {
+			if cs, err := decodeConfState(confData); err == nil && len(cs.Voters) > 0 {
+				s.conf = cs
+			}
 		}
 	}
 
@@ -66,12 +81,7 @@ func openDiskStorage(dir string) (*diskStorage, error) {
 			s.term = binary.LittleEndian.Uint64(p[1:9])
 			s.votedFor = binary.LittleEndian.Uint64(p[9:17])
 		case recAppend:
-			e := &raftpb.Entry{
-				Term:  binary.LittleEndian.Uint64(p[1:9]),
-				Index: binary.LittleEndian.Uint64(p[9:17]),
-				Data:  append([]byte(nil), p[17:]...),
-			}
-			// Entries at or below the snapshot were compacted already.
+			e := decodeEntry(p[1:])
 			if e.Index > s.snapIndex {
 				s.log = append(s.log, e)
 			}
@@ -79,6 +89,14 @@ func openDiskStorage(dir string) (*diskStorage, error) {
 			from := binary.LittleEndian.Uint64(p[1:9])
 			for len(s.log) > 0 && s.log[len(s.log)-1].Index >= from {
 				s.log = s.log[:len(s.log)-1]
+			}
+		case recConfState:
+			cs, err := decodeConfState(p[1:])
+			if err != nil {
+				return err
+			}
+			if len(cs.Voters) > 0 {
+				s.conf = cs
 			}
 		default:
 			return fmt.Errorf("unknown raft wal record type %d", p[0])
@@ -94,6 +112,46 @@ func openDiskStorage(dir string) (*diskStorage, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func encodeEntry(e *raftpb.Entry) []byte {
+	body, err := proto.Marshal(e)
+	if err != nil {
+		panic(err)
+	}
+	rec := make([]byte, 17+len(body))
+	rec[0] = recAppend
+	binary.LittleEndian.PutUint64(rec[1:9], e.Term)
+	binary.LittleEndian.PutUint64(rec[9:17], e.Index)
+	copy(rec[17:], body)
+	return rec
+}
+
+func decodeEntry(p []byte) *raftpb.Entry {
+	if len(p) < 16 {
+		return &raftpb.Entry{}
+	}
+	term := binary.LittleEndian.Uint64(p[0:8])
+	index := binary.LittleEndian.Uint64(p[8:16])
+	body := p[16:]
+	e := &raftpb.Entry{}
+	if err := proto.Unmarshal(body, e); err != nil {
+		return &raftpb.Entry{Term: term, Index: index, Data: append([]byte(nil), body...)}
+	}
+	e.Term = term
+	e.Index = index
+	return e
+}
+
+func (s *diskStorage) confState() ConfState { return s.conf }
+
+func (s *diskStorage) setConfState(c ConfState) error {
+	s.conf = c
+	rec := append([]byte{recConfState}, encodeConfState(c)...)
+	if err := s.wal.Append(rec); err != nil {
+		return err
+	}
+	return s.wal.Sync()
 }
 
 func (s *diskStorage) setHardState(term, votedFor uint64) error {
@@ -115,7 +173,6 @@ func (s *diskStorage) appendEntries(entries []*raftpb.Entry) error {
 		return nil
 	}
 	first := entries[0].Index
-	// Truncate in-memory + record truncation if we overwrite.
 	if n := len(s.log); n > 0 && s.log[n-1].Index >= first {
 		rec := make([]byte, 9)
 		rec[0] = recTruncate
@@ -128,12 +185,7 @@ func (s *diskStorage) appendEntries(entries []*raftpb.Entry) error {
 		}
 	}
 	for _, e := range entries {
-		rec := make([]byte, 17+len(e.Data))
-		rec[0] = recAppend
-		binary.LittleEndian.PutUint64(rec[1:9], e.Term)
-		binary.LittleEndian.PutUint64(rec[9:17], e.Index)
-		copy(rec[17:], e.Data)
-		if err := s.wal.Append(rec); err != nil {
+		if err := s.wal.Append(encodeEntry(e)); err != nil {
 			return err
 		}
 		s.log = append(s.log, e)
@@ -142,8 +194,6 @@ func (s *diskStorage) appendEntries(entries []*raftpb.Entry) error {
 	return nil
 }
 
-// sync fsyncs pending appends. Batches all appends since the last sync
-// into one fsync (group commit).
 func (s *diskStorage) sync() error {
 	if !s.dirty {
 		return nil
@@ -155,12 +205,10 @@ func (s *diskStorage) sync() error {
 	return nil
 }
 
-// saveSnapshot persists the snapshot and compacts the log through index.
-func (s *diskStorage) saveSnapshot(index, term uint64, data []byte) error {
+func (s *diskStorage) saveSnapshot(index, term uint64, data []byte, conf ConfState) error {
 	if index <= s.snapIndex {
 		return nil
 	}
-	// 1. Write snapshot data + meta atomically.
 	binPath := filepath.Join(s.dir, "snapshot.bin")
 	if err := atomicWrite(binPath, data); err != nil {
 		return err
@@ -171,8 +219,10 @@ func (s *diskStorage) saveSnapshot(index, term uint64, data []byte) error {
 	if err := atomicWrite(filepath.Join(s.dir, "snapshot.meta"), meta); err != nil {
 		return err
 	}
+	if err := atomicWrite(filepath.Join(s.dir, "snapshot.conf"), encodeConfState(conf)); err != nil {
+		return err
+	}
 
-	// 2. Compact the in-memory log.
 	var kept []*raftpb.Entry
 	for _, e := range s.log {
 		if e.Index > index {
@@ -181,8 +231,8 @@ func (s *diskStorage) saveSnapshot(index, term uint64, data []byte) error {
 	}
 	s.log = kept
 	s.snapIndex, s.snapTerm, s.snapshot = index, term, data
+	s.conf = conf
 
-	// 3. Rewrite the WAL without compacted entries (atomic rename).
 	tmp := s.walPath + ".tmp"
 	os.Remove(tmp)
 	nw, err := storage.OpenWAL(tmp)
@@ -196,13 +246,13 @@ func (s *diskStorage) saveSnapshot(index, term uint64, data []byte) error {
 	if err := nw.Append(rec); err != nil {
 		return err
 	}
+	if csRec := append([]byte{recConfState}, encodeConfState(conf)...); true {
+		if err := nw.Append(csRec); err != nil {
+			return err
+		}
+	}
 	for _, e := range s.log {
-		r := make([]byte, 17+len(e.Data))
-		r[0] = recAppend
-		binary.LittleEndian.PutUint64(r[1:9], e.Term)
-		binary.LittleEndian.PutUint64(r[9:17], e.Index)
-		copy(r[17:], e.Data)
-		if err := nw.Append(r); err != nil {
+		if err := nw.Append(encodeEntry(e)); err != nil {
 			return err
 		}
 	}
@@ -216,7 +266,7 @@ func (s *diskStorage) saveSnapshot(index, term uint64, data []byte) error {
 		return err
 	}
 	s.wal, err = storage.OpenWAL(s.walPath)
-	s.dirty = false // rewrite was fully synced by Close
+	s.dirty = false
 	return err
 }
 
@@ -240,8 +290,6 @@ func atomicWrite(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// --- log accessors (indices are absolute Raft indices) ---
-
 func (s *diskStorage) firstIndex() uint64 { return s.snapIndex + 1 }
 
 func (s *diskStorage) lastIndex() uint64 {
@@ -251,8 +299,6 @@ func (s *diskStorage) lastIndex() uint64 {
 	return s.snapIndex
 }
 
-// termAt returns the term of the entry at index, or (0,false) if unknown
-// (compacted below snapshot or beyond last).
 func (s *diskStorage) termAt(index uint64) (uint64, bool) {
 	if index == s.snapIndex {
 		return s.snapTerm, true
@@ -263,7 +309,6 @@ func (s *diskStorage) termAt(index uint64) (uint64, bool) {
 	return s.log[index-s.firstIndex()].Term, true
 }
 
-// entriesFrom returns entries in [lo, lastIndex]. Caller must ensure lo >= firstIndex.
 func (s *diskStorage) entriesFrom(lo uint64) []*raftpb.Entry {
 	if lo < s.firstIndex() || lo > s.lastIndex() {
 		return nil

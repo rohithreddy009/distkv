@@ -438,6 +438,322 @@ func (x *StatusResponse) GetAppliedIndex() uint64 {
 	return 0
 }
 
+type AddMemberRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	RaftAddr      string                 `protobuf:"bytes,2,opt,name=raft_addr,json=raftAddr,proto3" json:"raft_addr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddMemberRequest) Reset() {
+	*x = AddMemberRequest{}
+	mi := &file_proto_kv_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddMemberRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddMemberRequest) ProtoMessage() {}
+
+func (x *AddMemberRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_kv_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddMemberRequest.ProtoReflect.Descriptor instead.
+func (*AddMemberRequest) Descriptor() ([]byte, []int) {
+	return file_proto_kv_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *AddMemberRequest) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *AddMemberRequest) GetRaftAddr() string {
+	if x != nil {
+		return x.RaftAddr
+	}
+	return ""
+}
+
+type AddMemberResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddMemberResponse) Reset() {
+	*x = AddMemberResponse{}
+	mi := &file_proto_kv_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddMemberResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddMemberResponse) ProtoMessage() {}
+
+func (x *AddMemberResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_kv_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddMemberResponse.ProtoReflect.Descriptor instead.
+func (*AddMemberResponse) Descriptor() ([]byte, []int) {
+	return file_proto_kv_proto_rawDescGZIP(), []int{9}
+}
+
+type RemoveMemberRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveMemberRequest) Reset() {
+	*x = RemoveMemberRequest{}
+	mi := &file_proto_kv_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveMemberRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveMemberRequest) ProtoMessage() {}
+
+func (x *RemoveMemberRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_kv_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveMemberRequest.ProtoReflect.Descriptor instead.
+func (*RemoveMemberRequest) Descriptor() ([]byte, []int) {
+	return file_proto_kv_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RemoveMemberRequest) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+type RemoveMemberResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveMemberResponse) Reset() {
+	*x = RemoveMemberResponse{}
+	mi := &file_proto_kv_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveMemberResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveMemberResponse) ProtoMessage() {}
+
+func (x *RemoveMemberResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_kv_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveMemberResponse.ProtoReflect.Descriptor instead.
+func (*RemoveMemberResponse) Descriptor() ([]byte, []int) {
+	return file_proto_kv_proto_rawDescGZIP(), []int{11}
+}
+
+type ListMembersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMembersRequest) Reset() {
+	*x = ListMembersRequest{}
+	mi := &file_proto_kv_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMembersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMembersRequest) ProtoMessage() {}
+
+func (x *ListMembersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_kv_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMembersRequest.ProtoReflect.Descriptor instead.
+func (*ListMembersRequest) Descriptor() ([]byte, []int) {
+	return file_proto_kv_proto_rawDescGZIP(), []int{12}
+}
+
+type MemberInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	RaftAddr      string                 `protobuf:"bytes,2,opt,name=raft_addr,json=raftAddr,proto3" json:"raft_addr,omitempty"`
+	Voting        bool                   `protobuf:"varint,3,opt,name=voting,proto3" json:"voting,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MemberInfo) Reset() {
+	*x = MemberInfo{}
+	mi := &file_proto_kv_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MemberInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MemberInfo) ProtoMessage() {}
+
+func (x *MemberInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_kv_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MemberInfo.ProtoReflect.Descriptor instead.
+func (*MemberInfo) Descriptor() ([]byte, []int) {
+	return file_proto_kv_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *MemberInfo) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *MemberInfo) GetRaftAddr() string {
+	if x != nil {
+		return x.RaftAddr
+	}
+	return ""
+}
+
+func (x *MemberInfo) GetVoting() bool {
+	if x != nil {
+		return x.Voting
+	}
+	return false
+}
+
+type ListMembersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Members       []*MemberInfo          `protobuf:"bytes,1,rep,name=members,proto3" json:"members,omitempty"`
+	InJoint       bool                   `protobuf:"varint,2,opt,name=in_joint,json=inJoint,proto3" json:"in_joint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMembersResponse) Reset() {
+	*x = ListMembersResponse{}
+	mi := &file_proto_kv_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMembersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMembersResponse) ProtoMessage() {}
+
+func (x *ListMembersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_kv_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMembersResponse.ProtoReflect.Descriptor instead.
+func (*ListMembersResponse) Descriptor() ([]byte, []int) {
+	return file_proto_kv_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ListMembersResponse) GetMembers() []*MemberInfo {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+func (x *ListMembersResponse) GetInJoint() bool {
+	if x != nil {
+		return x.InJoint
+	}
+	return false
+}
+
 var File_proto_kv_proto protoreflect.FileDescriptor
 
 const file_proto_kv_proto_rawDesc = "" +
@@ -468,12 +784,31 @@ const file_proto_kv_proto_rawDesc = "" +
 	"\tleader_id\x18\x03 \x01(\x04R\bleaderId\x12\x12\n" +
 	"\x04term\x18\x04 \x01(\x04R\x04term\x12!\n" +
 	"\fcommit_index\x18\x05 \x01(\x04R\vcommitIndex\x12#\n" +
-	"\rapplied_index\x18\x06 \x01(\x04R\fappliedIndex2\xc6\x01\n" +
+	"\rapplied_index\x18\x06 \x01(\x04R\fappliedIndex\"?\n" +
+	"\x10AddMemberRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1b\n" +
+	"\traft_addr\x18\x02 \x01(\tR\braftAddr\"\x13\n" +
+	"\x11AddMemberResponse\"%\n" +
+	"\x13RemoveMemberRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\"\x16\n" +
+	"\x14RemoveMemberResponse\"\x14\n" +
+	"\x12ListMembersRequest\"Q\n" +
+	"\n" +
+	"MemberInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1b\n" +
+	"\traft_addr\x18\x02 \x01(\tR\braftAddr\x12\x16\n" +
+	"\x06voting\x18\x03 \x01(\bR\x06voting\"\\\n" +
+	"\x13ListMembersResponse\x12*\n" +
+	"\amembers\x18\x01 \x03(\v2\x10.kvpb.MemberInfoR\amembers\x12\x19\n" +
+	"\bin_joint\x18\x02 \x01(\bR\ainJoint2\x8f\x03\n" +
 	"\x02KV\x12*\n" +
 	"\x03Get\x12\x10.kvpb.GetRequest\x1a\x11.kvpb.GetResponse\x12*\n" +
 	"\x03Put\x12\x10.kvpb.PutRequest\x1a\x11.kvpb.PutResponse\x123\n" +
 	"\x06Delete\x12\x13.kvpb.DeleteRequest\x1a\x14.kvpb.DeleteResponse\x123\n" +
-	"\x06Status\x12\x13.kvpb.StatusRequest\x1a\x14.kvpb.StatusResponseB*Z(github.com/rohithreddy/distkv/proto/kvpbb\x06proto3"
+	"\x06Status\x12\x13.kvpb.StatusRequest\x1a\x14.kvpb.StatusResponse\x12<\n" +
+	"\tAddMember\x12\x16.kvpb.AddMemberRequest\x1a\x17.kvpb.AddMemberResponse\x12E\n" +
+	"\fRemoveMember\x12\x19.kvpb.RemoveMemberRequest\x1a\x1a.kvpb.RemoveMemberResponse\x12B\n" +
+	"\vListMembers\x12\x18.kvpb.ListMembersRequest\x1a\x19.kvpb.ListMembersResponseB*Z(github.com/rohithreddy/distkv/proto/kvpbb\x06proto3"
 
 var (
 	file_proto_kv_proto_rawDescOnce sync.Once
@@ -487,31 +822,45 @@ func file_proto_kv_proto_rawDescGZIP() []byte {
 	return file_proto_kv_proto_rawDescData
 }
 
-var file_proto_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_proto_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_proto_kv_proto_goTypes = []any{
-	(*GetRequest)(nil),     // 0: kvpb.GetRequest
-	(*GetResponse)(nil),    // 1: kvpb.GetResponse
-	(*PutRequest)(nil),     // 2: kvpb.PutRequest
-	(*PutResponse)(nil),    // 3: kvpb.PutResponse
-	(*DeleteRequest)(nil),  // 4: kvpb.DeleteRequest
-	(*DeleteResponse)(nil), // 5: kvpb.DeleteResponse
-	(*StatusRequest)(nil),  // 6: kvpb.StatusRequest
-	(*StatusResponse)(nil), // 7: kvpb.StatusResponse
+	(*GetRequest)(nil),           // 0: kvpb.GetRequest
+	(*GetResponse)(nil),          // 1: kvpb.GetResponse
+	(*PutRequest)(nil),           // 2: kvpb.PutRequest
+	(*PutResponse)(nil),          // 3: kvpb.PutResponse
+	(*DeleteRequest)(nil),        // 4: kvpb.DeleteRequest
+	(*DeleteResponse)(nil),       // 5: kvpb.DeleteResponse
+	(*StatusRequest)(nil),        // 6: kvpb.StatusRequest
+	(*StatusResponse)(nil),       // 7: kvpb.StatusResponse
+	(*AddMemberRequest)(nil),     // 8: kvpb.AddMemberRequest
+	(*AddMemberResponse)(nil),    // 9: kvpb.AddMemberResponse
+	(*RemoveMemberRequest)(nil),  // 10: kvpb.RemoveMemberRequest
+	(*RemoveMemberResponse)(nil), // 11: kvpb.RemoveMemberResponse
+	(*ListMembersRequest)(nil),   // 12: kvpb.ListMembersRequest
+	(*MemberInfo)(nil),           // 13: kvpb.MemberInfo
+	(*ListMembersResponse)(nil),  // 14: kvpb.ListMembersResponse
 }
 var file_proto_kv_proto_depIdxs = []int32{
-	0, // 0: kvpb.KV.Get:input_type -> kvpb.GetRequest
-	2, // 1: kvpb.KV.Put:input_type -> kvpb.PutRequest
-	4, // 2: kvpb.KV.Delete:input_type -> kvpb.DeleteRequest
-	6, // 3: kvpb.KV.Status:input_type -> kvpb.StatusRequest
-	1, // 4: kvpb.KV.Get:output_type -> kvpb.GetResponse
-	3, // 5: kvpb.KV.Put:output_type -> kvpb.PutResponse
-	5, // 6: kvpb.KV.Delete:output_type -> kvpb.DeleteResponse
-	7, // 7: kvpb.KV.Status:output_type -> kvpb.StatusResponse
-	4, // [4:8] is the sub-list for method output_type
-	0, // [0:4] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	13, // 0: kvpb.ListMembersResponse.members:type_name -> kvpb.MemberInfo
+	0,  // 1: kvpb.KV.Get:input_type -> kvpb.GetRequest
+	2,  // 2: kvpb.KV.Put:input_type -> kvpb.PutRequest
+	4,  // 3: kvpb.KV.Delete:input_type -> kvpb.DeleteRequest
+	6,  // 4: kvpb.KV.Status:input_type -> kvpb.StatusRequest
+	8,  // 5: kvpb.KV.AddMember:input_type -> kvpb.AddMemberRequest
+	10, // 6: kvpb.KV.RemoveMember:input_type -> kvpb.RemoveMemberRequest
+	12, // 7: kvpb.KV.ListMembers:input_type -> kvpb.ListMembersRequest
+	1,  // 8: kvpb.KV.Get:output_type -> kvpb.GetResponse
+	3,  // 9: kvpb.KV.Put:output_type -> kvpb.PutResponse
+	5,  // 10: kvpb.KV.Delete:output_type -> kvpb.DeleteResponse
+	7,  // 11: kvpb.KV.Status:output_type -> kvpb.StatusResponse
+	9,  // 12: kvpb.KV.AddMember:output_type -> kvpb.AddMemberResponse
+	11, // 13: kvpb.KV.RemoveMember:output_type -> kvpb.RemoveMemberResponse
+	14, // 14: kvpb.KV.ListMembers:output_type -> kvpb.ListMembersResponse
+	8,  // [8:15] is the sub-list for method output_type
+	1,  // [1:8] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_proto_kv_proto_init() }
@@ -525,7 +874,7 @@ func file_proto_kv_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_kv_proto_rawDesc), len(file_proto_kv_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -24,13 +24,14 @@ import (
 const SnapshotThreshold = 10000
 
 type Options struct {
-	ID           uint64
-	Dir          string
-	ListenKV     string            // client-facing gRPC address
-	ListenRaft   string            // raft-facing gRPC address
-	ListenMetrics string           // Prometheus /metrics HTTP address ("" = disabled)
-	Peers        map[uint64]string // peer ID -> raft address (including self)
-	Logger       *slog.Logger
+	ID            uint64
+	Dir           string
+	ListenKV      string
+	ListenRaft    string
+	ListenMetrics string
+	Peers         map[uint64]string // peer ID -> raft address (including self)
+	BootstrapIDs  []uint64          // initial voter IDs (defaults to all Peers keys)
+	Logger        *slog.Logger
 }
 
 // Server ties together the Raft node, state machine, and gRPC services.
@@ -49,6 +50,7 @@ type Server struct {
 
 	grpcKV   *grpc.Server
 	grpcRaft *grpc.Server
+	transport *grpcTransport
 
 	metricsStop chan struct{}
 }
@@ -73,29 +75,34 @@ func New(opts Options) (*Server, error) {
 	}
 	sm := newStateMachine(engine)
 
-	peerIDs := make([]uint64, 0, len(opts.Peers))
-	for id := range opts.Peers {
-		peerIDs = append(peerIDs, id)
+	peerIDs := opts.BootstrapIDs
+	if len(peerIDs) == 0 {
+		for id := range opts.Peers {
+			peerIDs = append(peerIDs, id)
+		}
 	}
 
 	applyCh := make(chan raft.ApplyMsg, 1024)
+	transport := newGRPCTransport(opts.Peers)
 	node, err := raft.NewNode(raft.Config{
 		ID:     opts.ID,
 		Peers:  peerIDs,
+		Addrs:  opts.Peers,
 		Dir:    filepath.Join(opts.Dir, "raft"),
 		Logger: opts.Logger,
-	}, newGRPCTransport(opts.Peers), applyCh)
+	}, transport, applyCh)
 	if err != nil {
 		engine.Close()
 		return nil, err
 	}
 
 	s := &Server{
-		opts:    opts,
-		node:    node,
-		sm:      sm,
-		logger:  opts.Logger,
-		waiters: map[uint64]chan waitResult{},
+		opts:      opts,
+		node:      node,
+		sm:        sm,
+		logger:    opts.Logger,
+		waiters:   map[uint64]chan waitResult{},
+		transport: transport,
 	}
 
 	// Restore from the latest snapshot before applying anything.
@@ -126,6 +133,16 @@ func (s *Server) applyLoop(applyCh chan raft.ApplyMsg) {
 			}
 			s.mu.Lock()
 			s.applied = msg.SnapshotIndex
+			s.mu.Unlock()
+
+		case msg.ConfChangeValid:
+			s.onConfChangeApplied(msg.ConfChange)
+			s.mu.Lock()
+			s.applied = msg.ConfChangeIndex
+			if ch, ok := s.waiters[msg.ConfChangeIndex]; ok {
+				ch <- waitResult{term: msg.ConfChangeTerm}
+				delete(s.waiters, msg.ConfChangeIndex)
+			}
 			s.mu.Unlock()
 
 		case msg.CommandValid:

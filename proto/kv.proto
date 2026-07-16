@@ -42,9 +42,38 @@ message StatusResponse {
   uint64 applied_index = 6;
 }
 
+message AddMemberRequest {
+  uint64 id = 1;
+  string raft_addr = 2;
+}
+
+message AddMemberResponse {}
+
+message RemoveMemberRequest {
+  uint64 id = 1;
+}
+
+message RemoveMemberResponse {}
+
+message ListMembersRequest {}
+
+message MemberInfo {
+  uint64 id = 1;
+  string raft_addr = 2;
+  bool voting = 3;
+}
+
+message ListMembersResponse {
+  repeated MemberInfo members = 1;
+  bool in_joint = 2;
+}
+
 service KV {
   rpc Get(GetRequest) returns (GetResponse);
   rpc Put(PutRequest) returns (PutResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   rpc Status(StatusRequest) returns (StatusResponse);
+  rpc AddMember(AddMemberRequest) returns (AddMemberResponse);
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
 }

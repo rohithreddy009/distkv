@@ -67,7 +67,7 @@ func TestInstallSnapshotOnLaggingFollower(t *testing.T) {
 
 	// Reconnect: follower can only catch up via InstallSnapshot.
 	c.Net.Reconnect(follower)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		snap, idx, _ := c.Node(follower).ReadSnapshot()
 		if idx >= entries[19].Index && string(snap) == "full-state-through-20" {

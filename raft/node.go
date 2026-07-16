@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand"
-	"sort"
 	"sync"
 	"time"
 
@@ -24,13 +23,16 @@ type Transport interface {
 // ApplyMsg is sent on the apply channel for each committed entry or
 // installed snapshot.
 type ApplyMsg struct {
-	// Committed log entry (CommandValid true).
 	CommandValid bool
 	Command      []byte
 	CommandIndex uint64
 	CommandTerm  uint64
 
-	// Installed snapshot (SnapshotValid true).
+	ConfChangeValid bool
+	ConfChange      *raftpb.ConfChange
+	ConfChangeIndex uint64
+	ConfChangeTerm  uint64
+
 	SnapshotValid bool
 	Snapshot      []byte
 	SnapshotIndex uint64
@@ -57,11 +59,11 @@ func (r role) String() string {
 }
 
 type Config struct {
-	ID    uint64   // this node's ID (must be > 0)
-	Peers []uint64 // all cluster member IDs, including self
-	Dir   string   // persistence directory
+	ID    uint64
+	Peers []uint64
+	Addrs map[uint64]string // optional raft addresses for bootstrap
+	Dir   string
 
-	// Timing. Defaults: 150-300ms election timeout, 50ms heartbeat.
 	ElectionTimeoutMin time.Duration
 	ElectionTimeoutMax time.Duration
 	HeartbeatInterval  time.Duration
@@ -84,9 +86,6 @@ func (c *Config) fill() {
 	}
 }
 
-// Node is a single Raft peer. All state transitions happen inside the run()
-// goroutine; external calls communicate with it via mu-protected state reads
-// and message passing.
 type Node struct {
 	cfg       Config
 	transport Transport
@@ -94,22 +93,21 @@ type Node struct {
 
 	mu    sync.Mutex
 	store *diskStorage
+	conf  ConfState
+	addrs map[uint64]string
 	role  role
 
 	leaderID    uint64
 	commitIndex uint64
 	lastApplied uint64
 
-	// Leader volatile state.
-	nextIndex    map[uint64]uint64
-	matchIndex   map[uint64]uint64
-	lastSentAt   map[uint64]time.Time
+	nextIndex  map[uint64]uint64
+	matchIndex map[uint64]uint64
+	lastSentAt map[uint64]time.Time
+	inflight   map[uint64]bool
 
 	electionDeadline time.Time
-
-	// Signals the run loop that something may need doing (replication,
-	// commit advancement).
-	kick chan struct{}
+	kick             chan struct{}
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -124,23 +122,27 @@ var ErrReadIndexTimeout = errors.New("readindex: quorum ack timeout")
 
 func NewNode(cfg Config, transport Transport, applyCh chan ApplyMsg) (*Node, error) {
 	cfg.fill()
-	store, err := openDiskStorage(cfg.Dir)
+	store, err := openDiskStorage(cfg.Dir, cfg.Peers)
 	if err != nil {
 		return nil, err
+	}
+	addrs := map[uint64]string{}
+	for k, v := range cfg.Addrs {
+		addrs[k] = v
 	}
 	n := &Node{
 		cfg:       cfg,
 		transport: transport,
 		applyCh:   applyCh,
 		store:     store,
+		conf:      store.confState(),
+		addrs:     addrs,
 		role:      follower,
 		kick:      make(chan struct{}, 1),
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
 	}
 	n.applyCond = sync.NewCond(&n.mu)
-	// A restarting node with a snapshot must tell the state machine to
-	// restore from it before applying subsequent entries.
 	if store.snapIndex > 0 {
 		n.commitIndex = store.snapIndex
 		n.lastApplied = store.snapIndex
@@ -164,7 +166,6 @@ func (n *Node) Stop() {
 	})
 }
 
-// Status returns (term, isLeader, leaderID).
 func (n *Node) Status() (uint64, bool, uint64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -183,25 +184,64 @@ func (n *Node) AppliedIndex() uint64 {
 	return n.lastApplied
 }
 
-// Propose appends a command to the leader's log. Returns the entry's index
-// and term, or ErrNotLeader.
+func (n *Node) ConfState() ConfState {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.conf.clone()
+}
+
+func (n *Node) MemberAddrs() map[uint64]string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make(map[uint64]string, len(n.addrs))
+	for k, v := range n.addrs {
+		out[k] = v
+	}
+	return out
+}
+
 func (n *Node) Propose(command []byte) (uint64, uint64, error) {
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.role != leader {
-		n.mu.Unlock()
 		return 0, 0, ErrNotLeader
 	}
-	index := n.store.lastIndex() + 1
-	term := n.store.term
-	entry := &raftpb.Entry{Term: term, Index: index, Data: command}
-	if err := n.store.appendEntries([]*raftpb.Entry{entry}); err != nil {
-		n.mu.Unlock()
+	return n.appendEntryLocked(&raftpb.Entry{
+		Term:  n.store.term,
+		Index: n.store.lastIndex() + 1,
+		Type:  raftpb.EntryType_ENTRY_NORMAL,
+		Data:  command,
+	})
+}
+
+func (n *Node) ProposeConfChange(cc *raftpb.ConfChange) (uint64, uint64, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.role != leader {
+		return 0, 0, ErrNotLeader
+	}
+	if cc.Type != raftpb.ConfChangeType_CONF_CHANGE_LEAVE_JOINT && n.conf.InJoint() {
+		return 0, 0, ErrConfChangeInProgress
+	}
+	tmp := n.conf.clone()
+	if _, err := tmp.ApplyConfChange(cc); err != nil {
 		return 0, 0, err
 	}
-	n.matchIndex[n.cfg.ID] = index
-	n.mu.Unlock()
+	return n.appendEntryLocked(&raftpb.Entry{
+		Term:       n.store.term,
+		Index:      n.store.lastIndex() + 1,
+		Type:       raftpb.EntryType_ENTRY_CONF_CHANGE,
+		ConfChange: cc,
+	})
+}
+
+func (n *Node) appendEntryLocked(e *raftpb.Entry) (uint64, uint64, error) {
+	if err := n.store.appendEntries([]*raftpb.Entry{e}); err != nil {
+		return 0, 0, err
+	}
+	n.matchIndex[n.cfg.ID] = e.Index
 	n.kickRun()
-	return index, term, nil
+	return e.Index, e.Term, nil
 }
 
 func (n *Node) kickRun() {
@@ -216,8 +256,8 @@ func (n *Node) resetElectionTimerLocked() {
 	n.electionDeadline = time.Now().Add(n.cfg.ElectionTimeoutMin + time.Duration(rand.Int63n(int64(span)+1)))
 }
 
-// run is the main event loop: election timeouts for followers/candidates,
-// heartbeat/replication ticks for leaders.
+func (n *Node) peerIDsLocked() []uint64 { return n.conf.AllPeerIDs() }
+
 func (n *Node) run() {
 	defer close(n.doneCh)
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -244,9 +284,22 @@ func (n *Node) run() {
 	}
 }
 
-// --- elections ---
+func (n *Node) LastLogIndex() uint64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.store.lastIndex()
+}
 
 func (n *Node) startElectionLocked() {
+	if !n.conf.Contains(n.cfg.ID) {
+		n.resetElectionTimerLocked()
+		return
+	}
+	// Fresh join node (only self in config, empty log): wait for leader contact.
+	if len(n.conf.VoterIDs()) == 1 && n.store.lastIndex() == n.store.snapIndex {
+		n.resetElectionTimerLocked()
+		return
+	}
 	n.role = candidate
 	newTerm := n.store.term + 1
 	if err := n.store.setHardState(newTerm, n.cfg.ID); err != nil {
@@ -264,11 +317,10 @@ func (n *Node) startElectionLocked() {
 		LastLogIndex: lastIdx,
 		LastLogTerm:  lastTerm,
 	}
-	n.cfg.Logger.Debug("starting election", "id", n.cfg.ID, "term", newTerm)
-
-	votes := 1 // self
+	peers := n.peerIDsLocked()
+	votes := 1
 	var voteMu sync.Mutex
-	for _, p := range n.cfg.Peers {
+	for _, p := range peers {
 		if p == n.cfg.ID {
 			continue
 		}
@@ -288,7 +340,7 @@ func (n *Node) startElectionLocked() {
 			}
 			voteMu.Lock()
 			votes++
-			won := votes*2 > len(n.cfg.Peers)
+			won := n.conf.HasVoteQuorum(votes)
 			voteMu.Unlock()
 			if won {
 				n.becomeLeaderLocked()
@@ -306,18 +358,16 @@ func (n *Node) becomeLeaderLocked() {
 	n.nextIndex = map[uint64]uint64{}
 	n.matchIndex = map[uint64]uint64{}
 	n.lastSentAt = map[uint64]time.Time{}
+	n.inflight = map[uint64]bool{}
 	last := n.store.lastIndex()
-	for _, p := range n.cfg.Peers {
+	for _, p := range n.peerIDsLocked() {
 		n.nextIndex[p] = last + 1
 		n.matchIndex[p] = 0
 	}
 	n.matchIndex[n.cfg.ID] = last
 	n.cfg.Logger.Info("became leader", "id", n.cfg.ID, "term", n.store.term)
 
-	// Append a no-op entry for the new term. Without it, entries from prior
-	// terms can never be committed (§5.4.2) and a freshly elected leader
-	// over an old log would stall forever.
-	noop := &raftpb.Entry{Term: n.store.term, Index: last + 1}
+	noop := &raftpb.Entry{Term: n.store.term, Index: last + 1, Type: raftpb.EntryType_ENTRY_NORMAL}
 	if err := n.store.appendEntries([]*raftpb.Entry{noop}); err != nil {
 		n.cfg.Logger.Error("append no-op failed", "err", err)
 	} else {
@@ -340,16 +390,12 @@ func (n *Node) stepDownLocked(term uint64) {
 	n.resetElectionTimerLocked()
 }
 
-// --- replication (leader side) ---
-
 func (n *Node) broadcastAppendLocked() {
-	// Group commit: one fsync covers every entry appended since the last
-	// sync (possibly many concurrent proposals).
 	if err := n.store.sync(); err != nil {
 		n.cfg.Logger.Error("log sync failed", "err", err)
 		return
 	}
-	for _, p := range n.cfg.Peers {
+	for _, p := range n.peerIDsLocked() {
 		if p == n.cfg.ID {
 			continue
 		}
@@ -357,8 +403,6 @@ func (n *Node) broadcastAppendLocked() {
 	}
 }
 
-// sendAppendLocked fires one replication RPC at peer if due: either there
-// are new entries to send or the heartbeat interval elapsed.
 func (n *Node) sendAppendLocked(peer uint64) {
 	ni := n.nextIndex[peer]
 	hasNew := n.store.lastIndex() >= ni
@@ -368,25 +412,35 @@ func (n *Node) sendAppendLocked(peer uint64) {
 	n.lastSentAt[peer] = time.Now()
 
 	if ni < n.store.firstIndex() {
-		// Peer is behind the snapshot: send it instead of log entries.
+		if n.inflight[peer] {
+			return
+		}
+		n.inflight[peer] = true
 		req := &raftpb.InstallSnapshotRequest{
 			Term:              n.store.term,
 			LeaderId:          n.cfg.ID,
 			LastIncludedIndex: n.store.snapIndex,
 			LastIncludedTerm:  n.store.snapTerm,
 			Data:              n.store.snapshot,
+			ConfState:         encodeConfState(n.conf),
 		}
-		go n.sendSnapshot(peer, req)
+		go func() {
+			defer func() {
+				n.mu.Lock()
+				delete(n.inflight, peer)
+				n.mu.Unlock()
+			}()
+			n.sendSnapshot(peer, req)
+		}()
 		return
 	}
 
 	prevIdx := ni - 1
 	prevTerm, ok := n.store.termAt(prevIdx)
 	if !ok {
-		return // race with concurrent compaction; retried next tick
+		return
 	}
 	entries := n.store.entriesFrom(ni)
-	// Copy: the slice aliases store.log which may be compacted concurrently.
 	entCopy := make([]*raftpb.Entry, len(entries))
 	copy(entCopy, entries)
 	req := &raftpb.AppendEntriesRequest{
@@ -397,7 +451,18 @@ func (n *Node) sendAppendLocked(peer uint64) {
 		Entries:      entCopy,
 		LeaderCommit: n.commitIndex,
 	}
-	go n.sendAppend(peer, req)
+	if n.inflight[peer] {
+		return
+	}
+	n.inflight[peer] = true
+	go func() {
+		defer func() {
+			n.mu.Lock()
+			delete(n.inflight, peer)
+			n.mu.Unlock()
+		}()
+		n.sendAppend(peer, req)
+	}()
 }
 
 func (n *Node) sendAppend(peer uint64, req *raftpb.AppendEntriesRequest) {
@@ -425,9 +490,7 @@ func (n *Node) sendAppend(peer uint64, req *raftpb.AppendEntriesRequest) {
 		n.advanceCommitLocked()
 		return
 	}
-	// Rejected: back up nextIndex using conflict hints.
 	if resp.ConflictTerm != 0 {
-		// Find our last entry with ConflictTerm; if found, next = that+1.
 		next := resp.ConflictIndex
 		for i := n.store.lastIndex(); i >= n.store.firstIndex(); i-- {
 			t, ok := n.store.termAt(i)
@@ -448,7 +511,7 @@ func (n *Node) sendAppend(peer uint64, req *raftpb.AppendEntriesRequest) {
 	} else if n.nextIndex[peer] > 1 {
 		n.nextIndex[peer]--
 	}
-	n.sendAppendLocked(peer)
+	n.kickRun()
 }
 
 func (n *Node) sendSnapshot(peer uint64, req *raftpb.InstallSnapshotRequest) {
@@ -473,21 +536,11 @@ func (n *Node) sendSnapshot(peer uint64, req *raftpb.InstallSnapshotRequest) {
 	}
 }
 
-// advanceCommitLocked commits the highest index replicated on a majority,
-// but only for entries from the current term (Raft §5.4.2).
 func (n *Node) advanceCommitLocked() {
-	matches := make([]uint64, 0, len(n.cfg.Peers))
-	for _, p := range n.cfg.Peers {
-		matches = append(matches, n.matchIndex[p])
-	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i] > matches[j] })
-	majority := matches[len(n.cfg.Peers)/2]
-
+	majority := n.conf.MaxCommitIndex(n.matchIndex)
 	if majority <= n.commitIndex {
 		return
 	}
-	// The leader's own vote toward the majority is only valid once its
-	// log is durable.
 	if err := n.store.sync(); err != nil {
 		n.cfg.Logger.Error("log sync failed", "err", err)
 		return
@@ -498,11 +551,49 @@ func (n *Node) advanceCommitLocked() {
 	}
 	n.commitIndex = majority
 	n.applyCond.Broadcast()
-	// Let followers learn the new commit index promptly.
-	n.broadcastAppendLocked()
+	n.kickRun()
 }
 
-// --- RPC handlers (called by transport) ---
+func (n *Node) applyConfChangeLocked(cc *raftpb.ConfChange) error {
+	next, err := n.conf.ApplyConfChange(cc)
+	if err != nil {
+		return err
+	}
+	n.conf = next
+	if len(cc.Context) > 0 && cc.Type == raftpb.ConfChangeType_CONF_CHANGE_ADD_NODE {
+		n.addrs[cc.NodeId] = string(cc.Context)
+	}
+	if cc.Type == raftpb.ConfChangeType_CONF_CHANGE_REMOVE_NODE {
+		delete(n.addrs, cc.NodeId)
+		if cc.NodeId == n.cfg.ID {
+			n.role = follower
+			n.leaderID = 0
+		}
+	}
+	if n.role == leader && n.nextIndex != nil {
+		switch cc.Type {
+		case raftpb.ConfChangeType_CONF_CHANGE_ADD_NODE:
+			if _, ok := n.nextIndex[cc.NodeId]; !ok {
+				n.nextIndex[cc.NodeId] = n.store.firstIndex()
+				n.matchIndex[cc.NodeId] = 0
+			}
+		case raftpb.ConfChangeType_CONF_CHANGE_REMOVE_NODE:
+			delete(n.nextIndex, cc.NodeId)
+			delete(n.matchIndex, cc.NodeId)
+			delete(n.lastSentAt, cc.NodeId)
+		}
+	}
+	if cc.Type == raftpb.ConfChangeType_CONF_CHANGE_LEAVE_JOINT && n.role == leader && n.nextIndex != nil {
+		for id := range n.conf.Voters {
+			if _, ok := n.nextIndex[id]; !ok {
+				last := n.store.lastIndex()
+				n.nextIndex[id] = last + 1
+				n.matchIndex[id] = 0
+			}
+		}
+	}
+	return n.store.setConfState(n.conf)
+}
 
 func (n *Node) HandleRequestVote(req *raftpb.RequestVoteRequest) *raftpb.RequestVoteResponse {
 	n.mu.Lock()
@@ -515,7 +606,9 @@ func (n *Node) HandleRequestVote(req *raftpb.RequestVoteRequest) *raftpb.Request
 	if req.Term < n.store.term {
 		return resp
 	}
-	// Election restriction: candidate's log must be at least as up-to-date.
+	if !n.conf.Contains(n.cfg.ID) {
+		return resp
+	}
 	lastIdx := n.store.lastIndex()
 	lastTerm, _ := n.store.termAt(lastIdx)
 	upToDate := req.LastLogTerm > lastTerm ||
@@ -547,7 +640,6 @@ func (n *Node) HandleAppendEntries(req *raftpb.AppendEntriesRequest) *raftpb.App
 	n.leaderID = req.LeaderId
 	n.resetElectionTimerLocked()
 
-	// Consistency check on the previous entry.
 	if req.PrevLogIndex > n.store.lastIndex() {
 		resp.ConflictIndex = n.store.lastIndex() + 1
 		return resp
@@ -555,7 +647,6 @@ func (n *Node) HandleAppendEntries(req *raftpb.AppendEntriesRequest) *raftpb.App
 	if req.PrevLogIndex >= n.store.firstIndex() || req.PrevLogIndex == n.store.snapIndex {
 		t, ok := n.store.termAt(req.PrevLogIndex)
 		if ok && t != req.PrevLogTerm {
-			// Report the first index of the conflicting term.
 			resp.ConflictTerm = t
 			ci := req.PrevLogIndex
 			for ci > n.store.firstIndex() {
@@ -572,20 +663,17 @@ func (n *Node) HandleAppendEntries(req *raftpb.AppendEntriesRequest) *raftpb.App
 			resp.ConflictIndex = n.store.firstIndex()
 			return resp
 		}
-	} else {
-		// prev is below our snapshot: entries there are committed and match.
 	}
 
-	// Append entries not already present; truncate on conflict.
 	var toAppend []*raftpb.Entry
 	for i, e := range req.Entries {
 		if e.Index <= n.store.snapIndex {
-			continue // already covered by snapshot
+			continue
 		}
 		if e.Index <= n.store.lastIndex() {
 			t, _ := n.store.termAt(e.Index)
 			if t == e.Term {
-				continue // already have it
+				continue
 			}
 		}
 		toAppend = req.Entries[i:]
@@ -596,7 +684,6 @@ func (n *Node) HandleAppendEntries(req *raftpb.AppendEntriesRequest) *raftpb.App
 			n.cfg.Logger.Error("append entries failed", "err", err)
 			return resp
 		}
-		// Must be durable before acknowledging to the leader.
 		if err := n.store.sync(); err != nil {
 			n.cfg.Logger.Error("log sync failed", "err", err)
 			return resp
@@ -614,10 +701,10 @@ func (n *Node) HandleAppendEntries(req *raftpb.AppendEntriesRequest) *raftpb.App
 
 func (n *Node) HandleInstallSnapshot(req *raftpb.InstallSnapshotRequest) *raftpb.InstallSnapshotResponse {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 
 	resp := &raftpb.InstallSnapshotResponse{Term: n.store.term}
 	if req.Term < n.store.term {
+		n.mu.Unlock()
 		return resp
 	}
 	if req.Term > n.store.term || n.role != follower {
@@ -627,17 +714,24 @@ func (n *Node) HandleInstallSnapshot(req *raftpb.InstallSnapshotRequest) *raftpb
 	n.leaderID = req.LeaderId
 	n.resetElectionTimerLocked()
 
-	if req.LastIncludedIndex <= n.commitIndex {
-		return resp // stale snapshot
+	if req.LastIncludedIndex <= n.store.snapIndex {
+		n.mu.Unlock()
+		return resp
 	}
-	if err := n.store.saveSnapshot(req.LastIncludedIndex, req.LastIncludedTerm, req.Data); err != nil {
+	conf := n.conf
+	if len(req.ConfState) > 0 {
+		if cs, err := decodeConfState(req.ConfState); err == nil {
+			conf = cs
+		}
+	}
+	if err := n.store.saveSnapshot(req.LastIncludedIndex, req.LastIncludedTerm, req.Data, conf); err != nil {
 		n.cfg.Logger.Error("save snapshot failed", "err", err)
 		return resp
 	}
+	n.conf = conf
 	n.commitIndex = req.LastIncludedIndex
 	n.lastApplied = req.LastIncludedIndex
 
-	// Deliver the snapshot to the state machine (outside the lock).
 	msg := ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      req.Data,
@@ -649,14 +743,9 @@ func (n *Node) HandleInstallSnapshot(req *raftpb.InstallSnapshotRequest) *raftpb
 	case n.applyCh <- msg:
 	case <-n.stopCh:
 	}
-	n.mu.Lock()
 	return resp
 }
 
-// --- snapshotting (state machine side) ---
-
-// Snapshot tells Raft the state machine has serialized its state through
-// index; the log can be compacted.
 func (n *Node) Snapshot(index uint64, data []byte) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -665,21 +754,17 @@ func (n *Node) Snapshot(index uint64, data []byte) error {
 	}
 	term, ok := n.store.termAt(index)
 	if !ok {
-		return nil // already compacted
+		return nil
 	}
-	return n.store.saveSnapshot(index, term, data)
+	return n.store.saveSnapshot(index, term, data, n.conf)
 }
 
-// ReadSnapshot returns the latest persisted snapshot (for restart restore).
 func (n *Node) ReadSnapshot() ([]byte, uint64, uint64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.store.snapshot, n.store.snapIndex, n.store.snapTerm
 }
 
-// ReadIndex confirms leadership with a quorum heartbeat, then returns the
-// commit index the state machine must apply through before a linearizable
-// read. Does not write to the Raft log.
 func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 	n.mu.Lock()
 	if n.role != leader {
@@ -689,11 +774,21 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 	readIdx := n.commitIndex
 	term := n.store.term
 	leaderID := n.cfg.ID
-	peers := append([]uint64(nil), n.cfg.Peers...)
+	peers := n.peerIDsLocked()
+	need := majority(len(peers))
+	if n.conf.InJoint() {
+		jm := majority(len(n.conf.Joint))
+		vm := majority(len(n.conf.Voters))
+		if jm > need {
+			need = jm
+		}
+		if vm > need {
+			need = vm
+		}
+	}
 	n.mu.Unlock()
 
-	quorum := len(peers)/2 + 1
-	acks := 1 // leader counts toward quorum
+	acks := 1
 	var ackMu sync.Mutex
 	done := make(chan struct{})
 	var once sync.Once
@@ -721,7 +816,7 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 			if resp.Ack {
 				ackMu.Lock()
 				acks++
-				if acks >= quorum {
+				if acks >= need {
 					signal()
 				}
 				ackMu.Unlock()
@@ -745,7 +840,6 @@ func (n *Node) ReadIndex(ctx context.Context) (uint64, error) {
 	}
 }
 
-// HandleReadIndex acknowledges a valid leader heartbeat for linearizable reads.
 func (n *Node) HandleReadIndex(req *raftpb.ReadIndexRequest) *raftpb.ReadIndexResponse {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -766,9 +860,6 @@ func (n *Node) HandleReadIndex(req *raftpb.ReadIndexRequest) *raftpb.ReadIndexRe
 	return resp
 }
 
-// --- applier ---
-
-// applier delivers committed entries to applyCh in order.
 func (n *Node) applier() {
 	for {
 		n.mu.Lock()
@@ -787,24 +878,33 @@ func (n *Node) applier() {
 			default:
 			}
 		}
-		// Collect a batch of committed-but-unapplied entries.
 		var msgs []ApplyMsg
 		for n.lastApplied < n.commitIndex {
 			next := n.lastApplied + 1
 			if next < n.store.firstIndex() {
-				// Compacted under us (snapshot install); skip forward.
 				n.lastApplied = n.store.snapIndex
 				continue
 			}
-			// Note: leader no-op entries (empty Data) are delivered too so
-			// consumers can track the applied index; they must ignore them.
 			e := n.store.entryAt(next)
-			msgs = append(msgs, ApplyMsg{
-				CommandValid: true,
-				Command:      e.Data,
-				CommandIndex: e.Index,
-				CommandTerm:  e.Term,
-			})
+			if e.Type == raftpb.EntryType_ENTRY_CONF_CHANGE && e.ConfChange != nil {
+				cc := e.ConfChange
+				if err := n.applyConfChangeLocked(cc); err != nil {
+					n.cfg.Logger.Error("apply conf change failed", "err", err)
+				}
+				msgs = append(msgs, ApplyMsg{
+					ConfChangeValid: true,
+					ConfChange:      cc,
+					ConfChangeIndex: e.Index,
+					ConfChangeTerm:  e.Term,
+				})
+			} else {
+				msgs = append(msgs, ApplyMsg{
+					CommandValid: true,
+					Command:      e.Data,
+					CommandIndex: e.Index,
+					CommandTerm:  e.Term,
+				})
+			}
 			n.lastApplied = next
 		}
 		n.mu.Unlock()

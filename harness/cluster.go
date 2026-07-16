@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rohithreddy/distkv/proto/raftpb"
 	"github.com/rohithreddy/distkv/raft"
 )
 
@@ -34,6 +35,7 @@ type appliedEntry struct {
 }
 
 type testingT interface {
+	Fatal(args ...any)
 	Fatalf(format string, args ...any)
 	Logf(format string, args ...any)
 	Helper()
@@ -55,18 +57,18 @@ func NewCluster(t testingT, n int) *Cluster {
 		c.IDs = append(c.IDs, uint64(i))
 	}
 	for _, id := range c.IDs {
-		c.startNode(id)
+		c.startNode(id, c.IDs)
 	}
 	return c
 }
 
-func (c *Cluster) startNode(id uint64) {
+func (c *Cluster) startNode(id uint64, peers []uint64) {
 	dir := filepath.Join(c.BaseDir, fmt.Sprintf("node%d", id))
 	applyCh := make(chan raft.ApplyMsg, 256)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	node, err := raft.NewNode(raft.Config{
 		ID:     id,
-		Peers:  append([]uint64(nil), c.IDs...),
+		Peers:  append([]uint64(nil), peers...),
 		Dir:    dir,
 		Logger: logger,
 	}, c.Net.Transport(id), applyCh)
@@ -113,7 +115,7 @@ func (c *Cluster) RestartNode(id uint64) {
 	c.mu.Lock()
 	c.applied[id] = nil
 	c.mu.Unlock()
-	c.startNode(id)
+	c.startNode(id, c.IDs)
 }
 
 func (c *Cluster) Node(id uint64) *raft.Node {
@@ -255,6 +257,120 @@ func (c *Cluster) CheckConsistency() {
 			}
 		}
 	}
+}
+
+// AddMember starts a new node and adds it to the running cluster.
+func (c *Cluster) AddMember(id uint64) {
+	c.T.Helper()
+	c.mu.Lock()
+	for _, existing := range c.IDs {
+		if existing == id {
+			c.mu.Unlock()
+			c.T.Fatalf("node %d already in cluster", id)
+		}
+	}
+	c.IDs = append(c.IDs, id)
+	c.mu.Unlock()
+
+	var bootstrap []uint64
+	for _, x := range c.IDs {
+		if x != id {
+			bootstrap = append(bootstrap, x)
+		}
+	}
+	c.startNode(id, bootstrap)
+	c.changeMembership(&raftpb.ConfChange{
+		Type:   raftpb.ConfChangeType_CONF_CHANGE_ADD_NODE,
+		NodeId: id,
+	})
+	c.waitConf(id, len(c.IDs), 3*time.Second)
+}
+
+// RemoveMember removes a node from the cluster and stops it.
+func (c *Cluster) RemoveMember(id uint64) {
+	c.T.Helper()
+	c.changeMembership(&raftpb.ConfChange{
+		Type:   raftpb.ConfChangeType_CONF_CHANGE_REMOVE_NODE,
+		NodeId: id,
+	})
+	c.StopNode(id)
+	c.mu.Lock()
+	var next []uint64
+	for _, x := range c.IDs {
+		if x != id {
+			next = append(next, x)
+		}
+	}
+	c.IDs = next
+	c.mu.Unlock()
+}
+
+func (c *Cluster) changeMembership(cc *raftpb.ConfChange) {
+	c.T.Helper()
+	if err := c.proposeConfChange(cc); err != nil {
+		c.T.Fatal(err)
+	}
+	switch cc.Type {
+	case raftpb.ConfChangeType_CONF_CHANGE_ADD_NODE:
+		c.waitLeaderConf(func(conf raft.ConfState) bool { return conf.InJoint() })
+	case raftpb.ConfChangeType_CONF_CHANGE_REMOVE_NODE:
+		c.waitLeaderConf(func(conf raft.ConfState) bool { return conf.InJoint() })
+	}
+	if cc.Type != raftpb.ConfChangeType_CONF_CHANGE_LEAVE_JOINT {
+		if err := c.proposeConfChange(&raftpb.ConfChange{
+			Type: raftpb.ConfChangeType_CONF_CHANGE_LEAVE_JOINT,
+		}); err != nil {
+			c.T.Fatal(err)
+		}
+		c.waitLeaderConf(func(conf raft.ConfState) bool { return !conf.InJoint() })
+	}
+	time.Sleep(50 * time.Millisecond)
+}
+
+func (c *Cluster) waitLeaderConf(ok func(raft.ConfState) bool) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		leader, err := c.Leader(deadline.Sub(time.Now()))
+		if err != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		if ok(c.Node(leader).ConfState()) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	c.T.Fatal("timed out waiting for config state on leader")
+}
+
+func (c *Cluster) proposeConfChange(cc *raftpb.ConfChange) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		leader, err := c.Leader(deadline.Sub(time.Now()))
+		if err != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		if _, _, err := c.Node(leader).ProposeConfChange(cc); err == nil {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return fmt.Errorf("propose conf change timed out: %+v", cc)
+}
+
+func (c *Cluster) waitConf(id uint64, voters int, timeout time.Duration) {
+	c.T.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conf := c.Node(id).ConfState()
+		if len(conf.VoterIDs()) >= voters && !conf.InJoint() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	c.T.Fatalf("node %d conf not ready (log=%d conf=%v joint=%v) after %v",
+		id, c.Node(id).LastLogIndex(), c.Node(id).ConfState().VoterIDs(), c.Node(id).ConfState().InJoint(), timeout)
 }
 
 // Shutdown stops all nodes.

@@ -4,11 +4,30 @@ package raftpb;
 
 option go_package = "github.com/rohithreddy/distkv/proto/raftpb";
 
+enum EntryType {
+  ENTRY_NORMAL = 0;
+  ENTRY_CONF_CHANGE = 1;
+}
+
+enum ConfChangeType {
+  CONF_CHANGE_ADD_NODE = 0;
+  CONF_CHANGE_REMOVE_NODE = 1;
+  CONF_CHANGE_LEAVE_JOINT = 2;
+}
+
+message ConfChange {
+  ConfChangeType type = 1;
+  uint64 node_id = 2;
+  bytes context = 3; // optional peer address (raft RPC)
+}
+
 // A single Raft log entry.
 message Entry {
   uint64 term  = 1;
   uint64 index = 2;
-  bytes  data  = 3; // serialized KV command
+  bytes  data  = 3; // serialized KV command (normal entries)
+  EntryType type = 4;
+  ConfChange conf_change = 5;
 }
 
 message RequestVoteRequest {
@@ -46,6 +65,7 @@ message InstallSnapshotRequest {
   uint64 last_included_index = 3;
   uint64 last_included_term  = 4;
   bytes  data                = 5;
+  bytes  conf_state          = 6;
 }
 
 message InstallSnapshotResponse {

@@ -45,7 +45,7 @@ key-value store.
 | Understandability | ~4k LOC Raft + storage, no consensus library |
 | Operability | Prometheus metrics, Grafana dashboard, Docker Compose |
 
-**Non-goals (v1):** multi-key transactions, dynamic membership, geo-replication,
+**Non-goals (v1):** multi-key transactions, geo-replication,
 sharding across multiple Raft groups.
 
 ---
@@ -283,7 +283,7 @@ With 3 nodes: **tolerates 1 failure**, requires **2 nodes** for quorum.
 | Read path | No log entry for reads | Read through Raft log | Lower read latency |
 | Engine WAL sync | Off (Raft log is source of truth) | Sync both | Avoid double-fsync tax |
 | Group commit | Batch fsync per tick | fsync per entry | ~4× write throughput at 64 writers |
-| Membership | Static 3-node | Joint-consensus changes | Simpler v1; harder to get wrong |
+| Membership | Dynamic add/remove | Auto-failure detection | Joint-consensus config changes |
 | Sharding | Single Raft group | Multi-group + consistent hash | Correctness first; scale later |
 | Client API | gRPC + protobuf | REST/JSON | Typed, fast, industry-standard for RPC |
 
@@ -342,11 +342,33 @@ go test -race ./...
 | Layer | What is tested |
 |---|---|
 | `storage/` | WAL crash recovery, torn writes, compaction, snapshot reset |
-| `harness/` | Elections, replication, partitions, divergence repair, snapshots, ReadIndex, randomized chaos |
+| `harness/` | Elections, replication, partitions, divergence repair, snapshots, ReadIndex, dynamic membership, randomized chaos |
 | `server/` | End-to-end gRPC cluster, leader kill failover, Prometheus `/metrics` |
+| `linearizability/` | Porcupine checker verifies concurrent put/get/delete histories against a sequential model |
 
 The harness runs entirely in-process with a simulated network — fast,
 deterministic, and runnable in CI without Docker.
+
+### Membership changes
+
+Add or remove nodes at runtime without restarting the cluster (Raft joint consensus).
+All steps below run via Docker on the Compose network.
+
+```bash
+# List members
+docker compose exec distkv-node1 distkv-cli -cluster distkv-node1:7001 members list
+
+# Start node 4 (join profile), then register it
+docker compose --profile join up -d --build distkv-node4
+docker compose exec distkv-node1 distkv-cli -cluster distkv-node1:7001 \
+  members add 4=distkv-node4:8004
+
+# Remove node 4
+docker compose exec distkv-node1 distkv-cli -cluster distkv-node1:7001 members remove 4
+docker compose --profile join stop distkv-node4
+```
+
+Existing nodes learn membership from the Raft log — no `-peers` flag change required.
 
 ---
 
@@ -398,6 +420,7 @@ storage/        LSM engine: WAL, memtable, SSTables, compaction
 server/         gRPC services, state machine, metrics
 client/         client library with leader discovery
 harness/        in-process fault-injection test cluster
+linearizability/ Porcupine linearizability checker
 cmd/
   distkv/       node binary
   distkv-cli/   CLI client
@@ -412,8 +435,6 @@ docker-compose.yml
 ## Future work
 
 - **Lease-based reads** — skip per-read quorum heartbeat during stable leadership
-- **Dynamic membership** — add/remove nodes via joint-consensus config changes
 - **Sharding** — multiple Raft groups with consistent hashing
-- **Linearizability checker** — Porcupine/Jepsen-style automated verification
 - **CI pipeline** — GitHub Actions running `go test -race` + e2e on every push
 - **Streaming snapshots** — chunk InstallSnapshot for large states

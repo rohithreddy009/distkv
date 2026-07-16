@@ -1,5 +1,7 @@
 # DistKV
 
+![CI](https://github.com/rohithreddy009/distkv/actions/workflows/ci.yml/badge.svg)
+
 A fault-tolerant, linearizable distributed key-value store written in Go. DistKV
 replicates every write across a Raft cluster using a from-scratch consensus
 implementation (no etcd/Hashicorp libraries), persists data through a custom
@@ -415,9 +417,3 @@ docker-compose.yml
 - **Linearizability checker** — Porcupine/Jepsen-style automated verification
 - **CI pipeline** — GitHub Actions running `go test -race` + e2e on every push
 - **Streaming snapshots** — chunk InstallSnapshot for large states
-
----
-
-## License
-
-MIT (add a LICENSE file if publishing publicly).

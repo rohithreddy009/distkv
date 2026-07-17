@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -118,8 +120,27 @@ func (a *api) status(w http.ResponseWriter, r *http.Request) {
 		AppliedIndex uint64 `json:"applied_index,omitempty"`
 		Error        string `json:"error,omitempty"`
 	}
-	var nodes []nodeStatus
+
+	addrs := map[string]struct{}{}
 	for _, addr := range a.c.Addrs() {
+		addrs[addr] = struct{}{}
+	}
+	if mem, err := a.c.ListMembers(ctx); err == nil {
+		for _, m := range mem.Members {
+			if kv := kvAddrFromRaft(m.RaftAddr, m.Id); kv != "" {
+				addrs[kv] = struct{}{}
+			}
+		}
+	}
+
+	ordered := make([]string, 0, len(addrs))
+	for addr := range addrs {
+		ordered = append(ordered, addr)
+	}
+	sort.Strings(ordered)
+
+	var nodes []nodeStatus
+	for _, addr := range ordered {
 		st, err := a.c.Status(ctx, addr)
 		if err != nil {
 			nodes = append(nodes, nodeStatus{Addr: addr, Error: err.Error()})
@@ -136,6 +157,21 @@ func (a *api) status(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
+}
+
+// kvAddrFromRaft maps Raft RPC addresses (…:800N) to client KV addresses (…:700N).
+func kvAddrFromRaft(raftAddr string, id uint64) string {
+	host, port, err := net.SplitHostPort(raftAddr)
+	if err != nil {
+		return ""
+	}
+	if len(port) == 4 && port[0] == '8' {
+		return net.JoinHostPort(host, "7"+port[1:])
+	}
+	if id > 0 {
+		return net.JoinHostPort(host, fmt.Sprintf("%d", 7000+id))
+	}
+	return ""
 }
 
 func (a *api) listMembers(w http.ResponseWriter, r *http.Request) {

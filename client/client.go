@@ -150,3 +150,43 @@ func (c *Client) Status(ctx context.Context, addr string) (*kvpb.StatusResponse,
 	defer cancel()
 	return cl.Status(cctx, &kvpb.StatusRequest{})
 }
+
+// Addrs returns the configured cluster addresses.
+func (c *Client) Addrs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.addrs...)
+}
+
+func (c *Client) ListMembers(ctx context.Context) (*kvpb.ListMembersResponse, error) {
+	var out *kvpb.ListMembersResponse
+	err := c.try(ctx, func(cl kvpb.KVClient) error {
+		cctx, cancel := context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+		resp, err := cl.ListMembers(cctx, &kvpb.ListMembersRequest{})
+		if err != nil {
+			return err
+		}
+		out = resp
+		return nil
+	})
+	return out, err
+}
+
+func (c *Client) AddMember(ctx context.Context, id uint64, raftAddr string) error {
+	return c.try(ctx, func(cl kvpb.KVClient) error {
+		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_, err := cl.AddMember(cctx, &kvpb.AddMemberRequest{Id: id, RaftAddr: raftAddr})
+		return err
+	})
+}
+
+func (c *Client) RemoveMember(ctx context.Context, id uint64) error {
+	return c.try(ctx, func(cl kvpb.KVClient) error {
+		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_, err := cl.RemoveMember(cctx, &kvpb.RemoveMemberRequest{Id: id})
+		return err
+	})
+}

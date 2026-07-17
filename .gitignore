@@ -2,3 +2,6 @@ bin/
 data/
 *.log
 linearizability/illegal-example.html
+web/node_modules/
+web/dist/
+

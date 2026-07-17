@@ -104,11 +104,12 @@ flowchart TB
 
 | Port | Service |
 |---|---|
+| 80 | Demo website (nginx → React UI + `/api`) |
 | 7001–7003 | Client KV API (gRPC) |
 | 8001–8003 | Inter-node Raft RPC (gRPC) |
 | 9001–9003 | Prometheus `/metrics` (HTTP) |
-| 9090 | Prometheus UI |
-| 3000 | Grafana UI |
+| 9090 | Prometheus UI (`--profile monitoring`) |
+| 3000 | Grafana UI (`--profile monitoring`) |
 
 ---
 
@@ -370,6 +371,25 @@ docker compose --profile join stop distkv-node4
 
 Existing nodes learn membership from the Raft log — no `-peers` flag change required.
 
+### Demo website
+
+A React UI + Go HTTP API sit behind nginx on port **80**. DistKV gRPC stays on the Docker network.
+
+```bash
+docker compose up --build -d
+# open http://localhost/  (or http://<EC2_PUBLIC_IP>/)
+```
+
+From the browser you can put/get/delete keys, see leaders/members, and add/remove voters.
+
+On EC2, open security group inbound **TCP 80**. Prefer not exposing `7001–7003` publicly if you only use the website.
+
+Monitoring (optional, needs more RAM):
+
+```bash
+docker compose --profile monitoring up -d
+```
+
 ---
 
 ## Running DistKV
@@ -379,20 +399,20 @@ Requires **Go 1.26+** and Docker (for full stack or monitoring).
 ### Docker (recommended)
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
 | Service | URL |
 |---|---|
-| KV cluster | `localhost:7001`, `:7002`, `:7003` |
-| Grafana | http://localhost:3000 (admin / admin) |
-| Prometheus | http://localhost:9090 |
+| Demo website | http://localhost/ |
+| KV cluster (gRPC) | `localhost:7001`, `:7002`, `:7003` |
+| Grafana | http://localhost:3000 (admin / admin) — `--profile monitoring` |
+| Prometheus | http://localhost:9090 — `--profile monitoring` |
 
 ```bash
-# build CLI locally (or use docker exec)
-go build -o bin/distkv-cli ./cmd/distkv-cli
-./bin/distkv-cli -cluster localhost:7001,localhost:7002,localhost:7003 put hello world
-./bin/distkv-cli get hello
+# CLI via Docker
+docker compose exec distkv-node1 distkv-cli \
+  -cluster distkv-node1:7001,distkv-node2:7002,distkv-node3:7003 put hello world
 ```
 
 ```bash
@@ -424,7 +444,10 @@ linearizability/ Porcupine linearizability checker
 cmd/
   distkv/       node binary
   distkv-cli/   CLI client
+  distkv-webapi/ HTTP JSON API for the demo UI
   bench/        load generator
+web/            React demo UI (Vite)
+deploy/         nginx + Dockerfiles for website stack
 monitoring/     Prometheus config + Grafana dashboard
 scripts/        cluster launcher, chaos test
 docker-compose.yml

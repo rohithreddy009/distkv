@@ -47,8 +47,7 @@ services:
     volumes:
       - distkv-n3:/data
 
-  # Optional 4th node: start with --profile join after the base cluster is up,
-  # then register it via distkv-cli members add (see README).
+  # Optional 4th node: start with --profile join after the base cluster is up.
   distkv-node4:
     profiles: ["join"]
     build: .
@@ -70,7 +69,29 @@ services:
       - distkv-node2
       - distkv-node3
 
+  webapi:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.webapi
+    environment:
+      DISTKV_CLUSTER: distkv-node1:7001,distkv-node2:7002,distkv-node3:7003
+      LISTEN: ":8080"
+    depends_on:
+      - distkv-node1
+      - distkv-node2
+      - distkv-node3
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    ports:
+      - "80:80"
+    depends_on:
+      - webapi
+
   prometheus:
+    profiles: ["monitoring"]
     image: prom/prometheus:v2.54.1
     ports:
       - "9090:9090"
@@ -82,6 +103,7 @@ services:
       - distkv-node3
 
   grafana:
+    profiles: ["monitoring"]
     image: grafana/grafana:11.2.0
     ports:
       - "3000:3000"
